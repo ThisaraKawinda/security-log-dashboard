@@ -1,0 +1,4 @@
+﻿pywin32>=306
+pandas>=2.0.0
+streamlit>=1.35.0
+plotly>=5.20.0
