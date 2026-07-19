@@ -1,4 +1,4 @@
-﻿# detection/rules.py
+# detection/rules.py
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -15,7 +15,6 @@ from config import (
     SUSPICIOUS_PROCESSES,
 )
 
-# System and service accounts excluded from behavioral detections
 SYSTEM_ACCOUNTS = {
     "SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE",
     "DWM-1", "DWM-2", "DWM-3",
@@ -23,7 +22,6 @@ SYSTEM_ACCOUNTS = {
     "ANONYMOUS LOGON",
 }
 
-# Service accounts (end in common suffixes or are known services)
 SERVICE_ACCOUNT_SUFFIXES = ("service", "svc", "daemon")
 
 
@@ -40,6 +38,45 @@ def _is_system_account(username):
     return False
 
 
+def _parse_ts(ts):
+    if isinstance(ts, datetime):
+        return ts
+    if isinstance(ts, str):
+        try:
+            return datetime.fromisoformat(ts)
+        except ValueError:
+            return datetime.min
+    return datetime.min
+
+
+def _deduplicate_events(events):
+    seen = set()
+    unique = []
+    for e in events:
+        key = (
+            str(e.get("timestamp", "")),
+            e.get("event_id"),
+            e.get("target_user", ""),
+            e.get("subject_user", ""),
+        )
+        if key not in seen:
+            seen.add(key)
+            unique.append(e)
+    return unique
+
+
+def _deduplicate_alerts(alerts):
+    seen = {}
+    for alert in alerts:
+        key = (alert["rule_id"], alert["title"])
+        if key not in seen:
+            seen[key] = alert
+        else:
+            if alert["count"] > seen[key]["count"]:
+                seen[key] = alert
+    return list(seen.values())
+
+
 def make_alert(rule_id, severity, title, description, evidence):
     return {
         "rule_id":     rule_id,
@@ -52,26 +89,13 @@ def make_alert(rule_id, severity, title, description, evidence):
     }
 
 
-def _parse_ts(ts):
-    if isinstance(ts, datetime):
-        return ts
-    if isinstance(ts, str):
-        try:
-            return datetime.fromisoformat(ts)
-        except ValueError:
-            return datetime.min
-    return datetime.min
-
-
 def detect_brute_force(events):
     alerts = []
     failed = [e for e in events if e["event_id"] == 4625]
-
     by_user = defaultdict(list)
     for e in failed:
         user = e.get("target_user") or "unknown"
         by_user[user].append(e)
-
     for user, user_events in by_user.items():
         user_events.sort(key=lambda e: _parse_ts(e["timestamp"]))
         for i, start_event in enumerate(user_events):
@@ -102,12 +126,10 @@ def detect_brute_force_success(events):
     alerts = []
     failed  = [e for e in events if e["event_id"] == 4625]
     success = [e for e in events if e["event_id"] == 4624]
-
     users_with_failures = defaultdict(list)
     for e in failed:
         user = e.get("target_user") or "unknown"
         users_with_failures[user].append(_parse_ts(e["timestamp"]))
-
     for user, fail_times in users_with_failures.items():
         if len(fail_times) < BRUTE_FORCE_THRESHOLD:
             continue
@@ -136,13 +158,11 @@ def detect_brute_force_success(events):
 def detect_password_spray(events):
     alerts = []
     failed = [e for e in events if e["event_id"] == 4625]
-
     by_ip = defaultdict(set)
     for e in failed:
         ip   = e.get("source_ip") or "unknown"
         user = e.get("target_user") or "unknown"
         by_ip[ip].add(user)
-
     for ip, targeted_users in by_ip.items():
         if len(targeted_users) >= SPRAY_ACCOUNT_THRESHOLD:
             evidence = [
@@ -168,11 +188,9 @@ def detect_new_admin_account(events):
     alerts = []
     created   = [e for e in events if e["event_id"] == 4720]
     escalated = [e for e in events if e["event_id"] in (4728, 4732, 4756)]
-
     for create_event in created:
         new_user  = create_event.get("target_user") or ""
         create_ts = _parse_ts(create_event["timestamp"])
-
         matching_escalation = [
             e for e in escalated
             if (
@@ -180,7 +198,6 @@ def detect_new_admin_account(events):
                 and abs((_parse_ts(e["timestamp"]) - create_ts).total_seconds()) <= 600
             )
         ]
-
         if matching_escalation:
             group = matching_escalation[0].get("group_name", "unknown group")
             alerts.append(make_alert(
@@ -214,12 +231,9 @@ def detect_new_admin_account(events):
 def detect_suspicious_process(events):
     alerts = []
     proc_events = [e for e in events if e["event_id"] == 4688]
-
     for e in proc_events:
         cmdline  = (e.get("command_line") or "").lower()
         procname = (e.get("process_name") or "").lower()
-
-        # Check known malicious process names
         for suspicious in SUSPICIOUS_PROCESSES:
             if suspicious.lower() in procname:
                 alerts.append(make_alert(
@@ -234,8 +248,6 @@ def detect_suspicious_process(events):
                     evidence=[e],
                 ))
                 break
-
-        # HIGH confidence: encoded PowerShell (-enc flag)
         if "-enc" in cmdline or "-encodedcommand" in cmdline:
             alerts.append(make_alert(
                 rule_id="PROC-002",
@@ -250,18 +262,10 @@ def detect_suspicious_process(events):
                 evidence=[e],
             ))
             continue
-
-        # MEDIUM confidence: multiple suspicious indicators together
-        high_risk_patterns = [
-            "iex", "invoke-expression", "downloadstring",
-            "webclient", "mimikatz", "whoami /all"
-        ]
+        high_risk_patterns   = ["iex", "invoke-expression", "downloadstring", "webclient", "mimikatz", "whoami /all"]
         medium_risk_patterns = ["hidden", "bypass", "net user"]
-
         high_hits   = [p for p in high_risk_patterns if p in cmdline]
         medium_hits = [p for p in medium_risk_patterns if p in cmdline]
-
-        # Only fire if: one high-risk pattern OR two+ medium-risk patterns
         if high_hits or len(medium_hits) >= 2:
             matched = high_hits + medium_hits
             alerts.append(make_alert(
@@ -281,37 +285,39 @@ def detect_suspicious_process(events):
 def detect_unusual_logon_hours(events):
     alerts = []
     logons = [e for e in events if e["event_id"] == 4624]
-
+    seen_user_hours = set()
     for e in logons:
         user = e.get("target_user") or ""
         if _is_system_account(user):
             continue
-
         hour = e.get("hour_of_day")
         if hour is None:
             continue
-
         is_unusual = (hour >= UNUSUAL_HOUR_START or hour < UNUSUAL_HOUR_END)
-        if is_unusual:
-            alerts.append(make_alert(
-                rule_id="TIME-001",
-                severity="LOW",
-                title=f"Unusual Logon Time - {user}",
-                description=(
-                    f"User '{user}' logged on at "
-                    f"{_parse_ts(e['timestamp']).strftime('%H:%M:%S')} "
-                    f"(outside business hours: "
-                    f"{UNUSUAL_HOUR_START:02d}:00-{UNUSUAL_HOUR_END:02d}:00)."
-                ),
-                evidence=[e],
-            ))
+        if not is_unusual:
+            continue
+        user_hour_key = (user, hour)
+        if user_hour_key in seen_user_hours:
+            continue
+        seen_user_hours.add(user_hour_key)
+        alerts.append(make_alert(
+            rule_id="TIME-001",
+            severity="LOW",
+            title=f"Unusual Logon Time - {user}",
+            description=(
+                f"User '{user}' logged on at "
+                f"{_parse_ts(e['timestamp']).strftime('%H:%M:%S')} "
+                f"(outside business hours: "
+                f"{UNUSUAL_HOUR_START:02d}:00-{UNUSUAL_HOUR_END:02d}:00)."
+            ),
+            evidence=[e],
+        ))
     return alerts
 
 
 def detect_account_lockout(events):
     alerts = []
     lockouts = [e for e in events if e["event_id"] == 4740]
-
     for e in lockouts:
         user = e.get("target_user") or "unknown"
         alerts.append(make_alert(
@@ -329,6 +335,7 @@ def detect_account_lockout(events):
 
 
 def run_all_rules(events):
+    unique_events = _deduplicate_events(events)
     all_alerts = []
     rules = [
         detect_brute_force,
@@ -339,14 +346,13 @@ def run_all_rules(events):
         detect_unusual_logon_hours,
         detect_account_lockout,
     ]
-
     for rule in rules:
         try:
-            fired = rule(events)
+            fired = rule(unique_events)
             all_alerts.extend(fired)
         except Exception as e:
             print(f"[!] Rule {rule.__name__} failed: {e}")
-
+    all_alerts = _deduplicate_alerts(all_alerts)
     severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
     all_alerts.sort(key=lambda a: severity_order.get(a["severity"], 99))
     return all_alerts
@@ -355,20 +361,16 @@ def run_all_rules(events):
 if __name__ == "__main__":
     sys.path.append(".")
     from storage.database import get_connection
-
     conn = get_connection()
     rows = conn.execute("SELECT * FROM events ORDER BY timestamp DESC").fetchall()
     conn.close()
-
     events = [dict(r) for r in rows]
     print(f"[*] Running detection rules against {len(events)} events...")
     print()
-
     alerts = run_all_rules(events)
     print(f"[+] {len(alerts)} alerts fired")
     print()
-
-    for alert in alerts[:30]:
+    for alert in alerts:
         print(f"  [{alert['severity']:8}] {alert['rule_id']} - {alert['title']}")
         print(f"             {alert['description'][:90]}")
         print()
