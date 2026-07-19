@@ -9,6 +9,19 @@ engineering, log forensics, and security data visualization skills.
 
 ---
 
+## Screenshots
+
+### Dashboard Overview
+![Dashboard Overview](screenshots/dashboard_overview.png)
+
+### Active Alerts Panel
+![Active Alerts](screenshots/dashboard_alerts.png)
+
+### Logon Activity Heatmap
+![Logon Heatmap](screenshots/dashboard_heatmap.png)
+
+---
+
 ## Project Status
 
 | Phase | Description | Status |
@@ -16,10 +29,10 @@ engineering, log forensics, and security data visualization skills.
 | 0 | Windows Logging Foundations | Complete |
 | 1 | Environment and Audit Policy Configuration | Complete |
 | 2 | Log Collection and Parsing Engine | Complete |
-| 3 | Detection Engine | In Progress |
+| 3 | Detection Engine | Complete |
 | 4 | SQLite Storage Layer | Complete |
-| 5 | Streamlit Dashboard | Pending |
-| 6 | Report Generation | Pending |
+| 5 | Streamlit Dashboard | Complete |
+| 6 | Report Generation | Complete |
 
 ---
 
@@ -48,12 +61,21 @@ SQLite Storage    (storage/)
         v
 Detection Engine  (detection/)
   - Threshold, sequence, and pattern-based rules
+  - Event and alert deduplication
   - Structured alert output with severity levels
         |
         v
 Streamlit Dashboard (dashboard/)
   - Interactive security visualization
   - Real-time metrics and alert panels
+  - Searchable event log table
+  - Logon activity heatmap
+        |
+        v
+Report Generator  (reports/)
+  - Automated Markdown security summaries
+  - Executive summary with status classification
+  - Authentication analysis and recommendations
 ```
 
 ---
@@ -71,6 +93,22 @@ Streamlit Dashboard (dashboard/)
 | PROC-001 | Known Attack Tool Detected  | Pattern   | CRITICAL |
 | PROC-002 | Suspicious Command Line     | Pattern   | HIGH     |
 | TIME-001 | Unusual Logon Hours         | Threshold | LOW      |
+
+### Detection Logic Types
+
+**Threshold-based:** Fires when a count exceeds a limit within a time
+window. Example: BF-001 fires when the same account accumulates 5+
+failed logons within 5 minutes.
+
+**Sequence-based:** Fires when Event A is followed by Event B within
+a time window. Example: BF-002 fires when a burst of failures is
+followed by a successful logon for the same account — the attacker
+got in pattern.
+
+**Pattern-based:** Fires when event content matches a known-malicious
+signature. Example: PROC-002 fires when a 4688 event contains -enc
+in the command line — the encoded PowerShell obfuscation pattern used
+by most commodity malware.
 
 ---
 
@@ -106,7 +144,7 @@ Streamlit Dashboard (dashboard/)
 
 Clone the repository and set up the virtual environment:
 
-    git clone https://github.com/YOUR_USERNAME/security-log-dashboard.git
+    git clone https://github.com/ThisaraKawinda/security-log-dashboard.git
     cd security-log-dashboard
     python -m venv venv
     venv\Scripts\activate
@@ -148,6 +186,14 @@ Run as Administrator to collect logs and populate the database:
 
     python run_pipeline.py
 
+### Launching the Dashboard
+
+    streamlit run dashboard/app.py
+
+### Generating a Security Report
+
+    python reports/report_generator.py
+
 ---
 
 ## Project Structure
@@ -171,13 +217,16 @@ Run as Administrator to collect logs and populate the database:
     |   +-- database.py            SQLite storage layer
     |
     +-- dashboard/
-    |   +-- app.py                 Streamlit dashboard (Phase 5)
+    |   +-- app.py                 Streamlit interactive dashboard
     |
     +-- reports/
-    |   +-- report_generator.py    Automated report generation (Phase 6)
+    |   +-- report_generator.py    Automated Markdown report generation
     |
     +-- data/
-    |   +-- sample_logs/           Sample datasets for testing
+    |   +-- sample_logs/
+    |       +-- sample_report.md   Sample generated security report
+    |
+    +-- screenshots/               Dashboard screenshots
     |
     +-- tests/
     |   +-- test_parser.py         Unit tests
@@ -231,6 +280,20 @@ correlating failed logons with subsequent process execution by the
 same user requires a single SQL query rather than a JOIN across
 multiple tables.
 
+### Event and Alert Deduplication
+
+Detection rules operate on deduplicated event sets keyed on
+(timestamp, event_id, target_user, subject_user). Alert deduplication
+collapses rules that fire multiple times on the same logical incident
+into a single alert, reducing noise and improving triage efficiency.
+
+---
+
+## Sample Security Report
+
+A sample auto-generated security report is available at:
+[data/sample_logs/sample_report.md](data/sample_logs/sample_report.md)
+
 ---
 
 ## Lessons Learned
@@ -256,6 +319,11 @@ multiple tables.
   policy application via the registry directly rather than relying on
   gpupdate exit status.
 
+- Single keyword pattern matching for suspicious processes generates
+  significant false positives. Effective detection requires either
+  high-confidence single indicators (encoded PowerShell -enc flag) or
+  combinations of lower-confidence indicators evaluated together.
+
 ---
 
 ## Audit Policy Reversion
@@ -277,6 +345,7 @@ To revert audit policy to Windows defaults after project completion:
 Thisara Kawinda
 B.Computing (Honours) in Information Systems
 University of Sri Jayewardenepura, Colombo, Sri Lanka
+github.com/ThisaraKawinda
 
 ---
 
