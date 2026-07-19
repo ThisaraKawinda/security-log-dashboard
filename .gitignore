@@ -34,3 +34,7 @@ desktop.ini
 
 # Logs
 *.log
+
+diagnose.py
+
+data/reports/
